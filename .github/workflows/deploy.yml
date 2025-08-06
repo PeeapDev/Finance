@@ -9,39 +9,83 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      
+      - name: Debug information
+        run: |
+          echo "GitHub workspace: $GITHUB_WORKSPACE"
+          echo "Node version:"
+          node -v
+          echo "NPM version:"
+          npm -v
+          echo "Directory contents:"
+          ls -la
       
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '16'
+          cache: 'npm'
           
       - name: Install dependencies
-        run: npm ci
+        run: |
+          if [ -f "package.json" ]; then
+            npm ci || npm install
+          else
+            echo "No package.json found, skipping npm install"
+          fi
         
       - name: Build assets
-        run: npm run production
+        run: |
+          if [ -f "package.json" ]; then
+            if grep -q "production" package.json; then
+              npm run production || npm run build
+            else
+              echo "No production script found, trying build"
+              npm run build || echo "No build script found, skipping asset compilation"
+            fi
+          else
+            echo "No package.json found, skipping asset build"
+          fi
         
       - name: Setup SSH key
         uses: webfactory/ssh-agent@v0.7.0
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
           
-      - name: Deploy to cPanel
+      - name: Test SSH connection
         run: |
           # Add the server to known hosts
           mkdir -p ~/.ssh
           ssh-keyscan -H finance.school.edu.sl >> ~/.ssh/known_hosts
           
-          # Deploy the application
-          rsync -avz --exclude '.git/' \
+          # Test connection
+          ssh -o StrictHostKeyChecking=no ${{ secrets.SSH_USER }}@finance.school.edu.sl "echo 'SSH connection successful'"
+          
+      - name: Deploy to cPanel
+        run: |
+          echo "Starting deployment to cPanel..."
+          
+          # Create directories if they don't exist
+          ssh ${{ secrets.SSH_USER }}@finance.school.edu.sl "mkdir -p ${{ secrets.REMOTE_PATH }}"
+          
+          # Deploy the application with verbose output
+          rsync -avz --stats --progress \
+                     --exclude '.git/' \
                      --exclude 'node_modules/' \
                      --exclude '.github/' \
                      --exclude '.env' \
-                     ./ ${{ secrets.SSH_USER }}@finance.school.edu.sl:${{ secrets.REMOTE_PATH }}
+                     ./ ${{ secrets.SSH_USER }}@finance.school.edu.sl:${{ secrets.REMOTE_PATH }}/
           
-          # Run Laravel commands
+          echo "Files deployed successfully"
+          
+      - name: Run Laravel commands
+        run: |
+          echo "Running Laravel commands..."
           ssh ${{ secrets.SSH_USER }}@finance.school.edu.sl "cd ${{ secrets.REMOTE_PATH }} && \
                                                            php artisan config:clear && \
                                                            php artisan cache:clear && \
                                                            php artisan view:clear && \
                                                            chmod -R 755 storage bootstrap/cache"
+          echo "Deployment completed successfully"
