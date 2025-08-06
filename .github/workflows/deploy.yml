@@ -1,0 +1,47 @@
+name: Deploy to cPanel
+
+on:
+  push:
+    branches: [ main ]  # Change this to your main branch name (main, master, etc.)
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '16'
+          
+      - name: Install dependencies
+        run: npm ci
+        
+      - name: Build assets
+        run: npm run production
+        
+      - name: Setup SSH key
+        uses: webfactory/ssh-agent@v0.7.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+          
+      - name: Deploy to cPanel
+        run: |
+          # Add the server to known hosts
+          mkdir -p ~/.ssh
+          ssh-keyscan -H finance.school.edu.sl >> ~/.ssh/known_hosts
+          
+          # Deploy the application
+          rsync -avz --exclude '.git/' \
+                     --exclude 'node_modules/' \
+                     --exclude '.github/' \
+                     --exclude '.env' \
+                     ./ ${{ secrets.SSH_USER }}@finance.school.edu.sl:${{ secrets.REMOTE_PATH }}
+          
+          # Run Laravel commands
+          ssh ${{ secrets.SSH_USER }}@finance.school.edu.sl "cd ${{ secrets.REMOTE_PATH }} && \
+                                                           php artisan config:clear && \
+                                                           php artisan cache:clear && \
+                                                           php artisan view:clear && \
+                                                           chmod -R 755 storage bootstrap/cache"
